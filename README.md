@@ -1,9 +1,6 @@
-
 # ProcessPurge v0.9.1
 
 ![ProcessPurge Logo](logo.png)
-
-(I don't know how to get this logo working here yet)
 
 Do you have a bunch of background apps you usually want to load, but frequently want to terminate to free up system resources? ProcessPurge is a lightweight and powerful Windows utility designed to help you quickly terminate unnecessary applications and free up system resources.
 

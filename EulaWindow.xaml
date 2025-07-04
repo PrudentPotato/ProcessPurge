@@ -1,0 +1,35 @@
+﻿<Window x:Class="ProcessPurge.EulaWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Agreement" Height="350" Width="500" ResizeMode="NoResize" WindowStartupLocation="CenterScreen">
+    <Grid Margin="15">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="ProcessPurge Agreement" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <TextBlock TextWrapping="Wrap">
+                Thank you for your support.
+                <LineBreak/><LineBreak/>
+                Sincerely, David Rader II
+                <LineBreak/><LineBreak/>
+                Version 0.9.1, July 4, 2025
+                <LineBreak/><LineBreak/>
+                <Hyperlink NavigateUri="https://chexed.net/" RequestNavigate="Hyperlink_RequestNavigate">https://chexed.net/</Hyperlink>
+                <LineBreak/><LineBreak/>
+                <Run FontWeight="Bold">Disclaimer:</Run>
+                <LineBreak/>
+                You are using this software solely at your own risk. It is provided 'as is' without warranty of any kind. The author is not responsible for any data loss or system instability that may result from its use.
+            </TextBlock>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,15,0,0">
+            <Button Content="Accept" Width="100" IsDefault="True" Click="Accept_Click"/>
+            <Button Content="Decline" Width="100" Margin="10,0,0,0" Click="Decline_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
