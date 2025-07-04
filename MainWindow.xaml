@@ -2,7 +2,7 @@
 <Window x:Class="ProcessPurge.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ProcessPurge" Height="500" Width="800" Icon="logo.png" Closing="Window_Closing">
+        Title="{Binding WindowTitle}" Height="500" Width="800" Icon="logo.png" Closing="Window_Closing">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
@@ -14,7 +14,6 @@
                 <ListView x:Name="ProcessListView" ItemsSource="{Binding AllProcesses}">
                     <ListView.View>
                         <GridView>
-                            <!-- THIS IS THE UPDATED COLUMN -->
                             <GridViewColumn Width="50">
                                 <GridViewColumn.Header>
                                     <GridViewColumnHeader Tag="IsSelected" Click="GridViewColumnHeader_Click">Select</GridViewColumnHeader>
@@ -41,12 +40,19 @@
                                     <GridViewColumnHeader Tag="Name" Click="GridViewColumnHeader_Click">Process Name</GridViewColumnHeader>
                                 </GridViewColumn.Header>
                             </GridViewColumn>
-                            <GridViewColumn DisplayMemberBinding="{Binding Memory}" Width="120">
+                            <GridViewColumn DisplayMemberBinding="{Binding Memory, StringFormat={}{0:N0}}" Width="120">
                                 <GridViewColumn.Header>
-                                    <GridViewColumnHeader Tag="Memory" Click="GridViewColumnHeader_Click">Memory (KB)</GridViewColumnHeader>
+                                    <GridViewColumnHeader Tag="Memory" Click="GridViewColumnHeader_Click">Memory (MB)</GridViewColumnHeader>
                                 </GridViewColumn.Header>
                             </GridViewColumn>
-                            <GridViewColumn DisplayMemberBinding="{Binding ProcessorTime}" Width="150">
+                            <!-- NEW: CPU % Column -->
+                            <GridViewColumn x:Name="CpuPercentageColumn" DisplayMemberBinding="{Binding CpuUsage, StringFormat={}{0:F2} %}" Width="100">
+                                <GridViewColumn.Header>
+                                    <GridViewColumnHeader Tag="CpuUsage" Click="GridViewColumnHeader_Click">CPU %</GridViewColumnHeader>
+                                </GridViewColumn.Header>
+                            </GridViewColumn>
+                            <!-- NEW: CPU Time Column -->
+                            <GridViewColumn x:Name="CpuTimeColumn" DisplayMemberBinding="{Binding ProcessorTime}" Width="150">
                                 <GridViewColumn.Header>
                                     <GridViewColumnHeader Tag="ProcessorTime" Click="GridViewColumnHeader_Click">CPU Time</GridViewColumnHeader>
                                 </GridViewColumn.Header>

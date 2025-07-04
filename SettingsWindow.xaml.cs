@@ -14,7 +14,8 @@ namespace ProcessPurge
             StartWithWindowsCheck.IsChecked = currentSettings.StartWithWindows;
             MinimizeToTrayCheck.IsChecked = currentSettings.MinimizeToTrayOnClose;
             PoliteKillCheck.IsChecked = currentSettings.PoliteKill;
-            BlockCriticalCheck.IsChecked = currentSettings.BlockCriticalProcesses; // <-- ADD THIS
+            BlockCriticalCheck.IsChecked = currentSettings.BlockCriticalProcesses;
+            ShowCpuPercentageCheck.IsChecked = currentSettings.ShowCpuPercentage;
         }
 
         private void Save_Click(object sender, RoutedEventArgs e)
@@ -25,6 +26,13 @@ namespace ProcessPurge
         private void Cancel_Click(object sender, RoutedEventArgs e)
         {
             DialogResult = false;
+        }
+
+        private void About_Click(object sender, RoutedEventArgs e)
+        {
+            // Create and show the new About window
+            var aboutWindow = new AboutWindow();
+            aboutWindow.ShowDialog();
         }
     }
 }

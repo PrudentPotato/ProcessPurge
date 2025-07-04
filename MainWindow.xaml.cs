@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Reflection; // Required for getting the version
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -28,7 +29,8 @@ namespace ProcessPurge
         public string? Name { get; set; }
         public long Memory { get; set; }
         public bool IsSelected { get; set; }
-        public TimeSpan ProcessorTime { get; set; }
+        public float CpuUsage { get; set; }
+        public TimeSpan ProcessorTime { get; set; } // Re-added for the fast method
         public bool IsCritical { get; set; }
     }
 
@@ -44,26 +46,25 @@ namespace ProcessPurge
         private AppSettings _settings = new();
         private readonly string _settingsFilePath;
 
-        // List of critical system processes to protect from termination.
         private readonly HashSet<string> _criticalProcesses = new(StringComparer.OrdinalIgnoreCase)
         {
             "svchost", "csrss", "wininit", "winlogon", "lsass", "smss", "services"
         };
 
-        // Data collections that power the UI lists.
         public ObservableCollection<ProcessInfo> PurgeList { get; set; } = new();
         private List<ProcessInfo> AllProcesses { get; set; } = new();
 
-        /// <summary>
-        /// Constructor: Runs once when the application starts.
-        /// </summary>
+        public string WindowTitle { get; }
+
         public MainWindow()
         {
-            // Define where the settings file will be saved.
+            var version = Assembly.GetExecutingAssembly().GetName().Version;
+            WindowTitle = $"ProcessPurge v{version?.Major}.{version?.Minor}.{version?.Build}";
+            this.DataContext = this;
+
             _settingsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ProcessPurge", "settings.json");
             LoadSettings();
 
-            // Show the End-User License Agreement on first run.
             if (!_settings.EulaAccepted)
             {
                 var eula = new EulaWindow();
@@ -79,71 +80,153 @@ namespace ProcessPurge
                 }
             }
 
-            // Initialize the UI components defined in XAML.
             InitializeComponent();
-
-            // Link the UI list to our data collection.
             PurgeListView.ItemsSource = PurgeList;
 
-            // Populate the main process list.
-            LoadProcessList();
+            // Set initial column visibility based on settings
+            UpdateColumnVisibility();
 
-            // --- System Tray Icon Setup ---
+            _ = InitialLoadAndRefresh();
+
+            ManageStartupTask();
+
             _notifyIcon = new NotifyIcon
             {
                 Icon = new Icon("logo.ico"),
                 Visible = true,
                 Text = "ProcessPurge"
             };
-            // Create the right-click menu for the tray icon.
             var contextMenu = new ContextMenuStrip();
             contextMenu.Items.Add("Purge", null, (s, e) => PurgeProcesses(false));
             contextMenu.Items.Add("Open", null, (s, e) => ShowWindow());
             contextMenu.Items.Add("Settings", null, (s, e) => OpenSettings());
             contextMenu.Items.Add("About", null, (s, e) => ShowAbout());
-            contextMenu.Items.Add("-"); // A separator line.
+            contextMenu.Items.Add("-");
             contextMenu.Items.Add("Exit", null, (s, e) => ExitApplication());
             _notifyIcon.ContextMenuStrip = contextMenu;
             _notifyIcon.DoubleClick += (s, e) => ShowWindow();
         }
 
-        /// <summary>
-        /// Scans the system for all running processes and populates the main list.
-        /// </summary>
-        private void LoadProcessList()
+        private async Task InitialLoadAndRefresh()
         {
-            UpdatePurgeListFromCheckboxes();
+            await LoadProcessList();
+            await Task.Delay(1500);
+            await LoadProcessList();
+        }
 
-            AllProcesses.Clear();
-            var processes = Process.GetProcesses().OrderBy(p => p.ProcessName).ToArray();
-
-            foreach (var process in processes)
+        /// <summary>
+        /// Shows or hides the CPU columns based on the current setting by changing their width.
+        /// </summary>
+        private void UpdateColumnVisibility()
+        {
+            if (_settings.ShowCpuPercentage)
             {
-                TimeSpan processorTime = TimeSpan.Zero;
-                try { processorTime = process.TotalProcessorTime; } catch { /* Ignore access errors */ }
-
-                var processInfo = new ProcessInfo
-                {
-                    Name = process.ProcessName,
-                    Memory = process.WorkingSet64 / 1024,
-                    ProcessorTime = processorTime,
-                    IsCritical = _settings.BlockCriticalProcesses && _criticalProcesses.Contains(process.ProcessName),
-                    IsSelected = PurgeList.Any(p => p.Name == process.ProcessName)
-                };
-                AllProcesses.Add(processInfo);
+                // Show the CPU % column by setting its width from 0 to its original value.
+                CpuPercentageColumn.Width = 100;
+                // Hide the CPU Time column by setting its width to 0.
+                CpuTimeColumn.Width = 0;
             }
+            else
+            {
+                // Hide the CPU % column.
+                CpuPercentageColumn.Width = 0;
+                // Show the CPU Time column.
+                CpuTimeColumn.Width = 150;
+            }
+        }
+
+        private async Task LoadProcessList()
+        {
+            var processes = Process.GetProcesses();
+            var processInfos = new List<ProcessInfo>();
+
+            // --- Conditional CPU Calculation ---
+            if (_settings.ShowCpuPercentage)
+            {
+                // SLOW METHOD: Calculate live CPU percentage
+                var cpuCounters = new Dictionary<int, PerformanceCounter>();
+                var category = new PerformanceCounterCategory("Process");
+                var instanceNames = category.GetInstanceNames();
+                var processIdToInstanceName = new Dictionary<int, string>();
+
+                foreach (var instanceName in instanceNames)
+                {
+                    using (var counter = new PerformanceCounter("Process", "ID Process", instanceName, readOnly: true))
+                    {
+                        try
+                        {
+                            if (!processIdToInstanceName.ContainsKey((int)counter.RawValue))
+                                processIdToInstanceName.Add((int)counter.RawValue, instanceName);
+                        }
+                        catch { }
+                    }
+                }
+
+                foreach (var process in processes)
+                {
+                    if (processIdToInstanceName.TryGetValue(process.Id, out var instanceName))
+                    {
+                        try
+                        {
+                            var counter = new PerformanceCounter("Process", "% Processor Time", instanceName, readOnly: true);
+                            counter.NextValue();
+                            cpuCounters.Add(process.Id, counter);
+                        }
+                        catch { }
+                    }
+                }
+
+                await Task.Delay(1000);
+
+                foreach (var process in processes)
+                {
+                    float cpuUsage = 0;
+                    if (cpuCounters.TryGetValue(process.Id, out var counter))
+                    {
+                        try { cpuUsage = counter.NextValue() / Environment.ProcessorCount; } catch { }
+                    }
+                    processInfos.Add(CreateProcessInfo(process, cpuUsage: cpuUsage));
+                }
+
+                foreach (var counter in cpuCounters.Values) counter.Dispose();
+            }
+            else
+            {
+                // FAST METHOD: Get total CPU time only
+                foreach (var process in processes)
+                {
+                    processInfos.Add(CreateProcessInfo(process));
+                }
+            }
+
+            AllProcesses = processInfos.OrderBy(p => p.Name).ToList();
             ProcessListView.ItemsSource = AllProcesses;
             CollectionViewSource.GetDefaultView(ProcessListView.ItemsSource)?.Refresh();
         }
 
         /// <summary>
-        /// Terminates all processes in the PurgeList.
+        /// Helper method to create a ProcessInfo object.
         /// </summary>
+        private ProcessInfo CreateProcessInfo(Process process, float cpuUsage = 0)
+        {
+            TimeSpan processorTime = TimeSpan.Zero;
+            try { processorTime = process.TotalProcessorTime; } catch { }
+
+            return new ProcessInfo
+            {
+                Name = process.ProcessName,
+                Memory = process.WorkingSet64 / (1024 * 1024),
+                CpuUsage = cpuUsage,
+                ProcessorTime = processorTime,
+                IsCritical = _settings.BlockCriticalProcesses && _criticalProcesses.Contains(process.ProcessName),
+                IsSelected = PurgeList.Any(p => p.Name == process.ProcessName)
+            };
+        }
+
         private async void PurgeProcesses(bool showConfirmation)
         {
             if (PurgeList.Count == 0) return;
 
-            // Optionally show a confirmation dialog.
             if (showConfirmation)
             {
                 var result = MessageBox.Show($"Are you sure you want to terminate {PurgeList.Count} process(es)?", "Confirm Purge", MessageBoxButton.YesNo, MessageBoxImage.Warning);
@@ -156,19 +239,17 @@ namespace ProcessPurge
             foreach (var processInfo in PurgeList.ToList())
             {
                 if (processInfo == selfDestruct || string.IsNullOrEmpty(processInfo.Name)) continue;
-
                 try
                 {
                     var processesToKill = Process.GetProcessesByName(processInfo.Name);
                     foreach (var p in processesToKill)
                     {
-                        // Use polite or forceful termination based on settings.
                         if (_settings.PoliteKill)
                         {
                             if (p.CloseMainWindow())
                             {
-                                await Task.Delay(2000); // Wait 2 seconds for it to close.
-                                if (!p.HasExited) p.Kill(); // Force kill if it's still running.
+                                await Task.Delay(2000);
+                                if (!p.HasExited) p.Kill();
                             }
                             else { p.Kill(); }
                         }
@@ -176,10 +257,9 @@ namespace ProcessPurge
                         terminatedCount++;
                     }
                 }
-                catch { /* Ignore errors if a process can't be killed */ }
+                catch { }
             }
 
-            // Handle self-termination last.
             if (selfDestruct != null)
             {
                 ExitApplication();
@@ -189,21 +269,16 @@ namespace ProcessPurge
                 MessageBox.Show($"{terminatedCount} process(es) terminated.", "Purge Complete", MessageBoxButton.OK, MessageBoxImage.Information);
             }
 
-            LoadProcessList();
+            await LoadProcessList();
         }
 
         #region Window and UI Events
-        /// <summary>
-        /// Handles the main window's closing event.
-        /// </summary>
         private void Window_Closing(object sender, CancelEventArgs e)
         {
-            UpdatePurgeListFromCheckboxes();
             SaveSettings();
-            // Hide to tray or exit completely based on settings.
             if (_settings.MinimizeToTrayOnClose)
             {
-                e.Cancel = true; // Prevent the window from closing.
+                e.Cancel = true;
                 this.Visibility = Visibility.Hidden;
             }
             else
@@ -212,50 +287,31 @@ namespace ProcessPurge
             }
         }
 
-        /// <summary>
-        /// Updates the PurgeList based on which boxes are checked in the main list.
-        /// </summary>
-        private void UpdatePurgeListFromCheckboxes()
-        {
-            var selectedProcesses = AllProcesses.Where(p => p.IsSelected).ToList();
-            var currentOrder = PurgeList.ToList();
-            PurgeList.Clear();
-
-            // Re-add items in their previously saved order.
-            foreach (var orderedItem in currentOrder)
-            {
-                var matchingSelectedItem = selectedProcesses.FirstOrDefault(p => p.Name == orderedItem.Name);
-                if (matchingSelectedItem != null)
-                {
-                    PurgeList.Add(matchingSelectedItem);
-                    selectedProcesses.Remove(matchingSelectedItem);
-                }
-            }
-            // Add any newly selected items.
-            foreach (var newItem in selectedProcesses)
-            {
-                PurgeList.Add(newItem);
-            }
-
-            // Ensure ProcessPurge is always last if selected.
-            var self = PurgeList.FirstOrDefault(p => p.Name?.Equals("ProcessPurge", StringComparison.OrdinalIgnoreCase) ?? false);
-            if (self != null)
-            {
-                PurgeList.Move(PurgeList.IndexOf(self), PurgeList.Count - 1);
-            }
-        }
-
-        /// <summary>
-        /// Fires whenever any checkbox in the main list is clicked.
-        /// </summary>
         private void CheckBox_Click(object sender, RoutedEventArgs e)
         {
-            UpdatePurgeListFromCheckboxes();
+            if (sender is CheckBox checkBox && checkBox.DataContext is ProcessInfo processInfo)
+            {
+                if (checkBox.IsChecked == true)
+                {
+                    if (!PurgeList.Any(p => p.Name == processInfo.Name))
+                    {
+                        PurgeList.Add(processInfo);
+                    }
+                }
+                else
+                {
+                    var itemToRemove = PurgeList.FirstOrDefault(p => p.Name == processInfo.Name);
+                    if (itemToRemove != null) PurgeList.Remove(itemToRemove);
+                }
+
+                var self = PurgeList.FirstOrDefault(p => p.Name?.Equals("ProcessPurge", StringComparison.OrdinalIgnoreCase) ?? false);
+                if (self != null)
+                {
+                    PurgeList.Move(PurgeList.IndexOf(self), PurgeList.Count - 1);
+                }
+            }
         }
 
-        /// <summary>
-        /// Moves the selected item up in the Termination Order list.
-        /// </summary>
         private void MoveUp_Click(object sender, RoutedEventArgs e)
         {
             if (PurgeListView.SelectedItem is ProcessInfo selectedItem)
@@ -269,9 +325,6 @@ namespace ProcessPurge
             }
         }
 
-        /// <summary>
-        /// Moves the selected item down in the Termination Order list.
-        /// </summary>
         private void MoveDown_Click(object sender, RoutedEventArgs e)
         {
             if (PurgeListView.SelectedItem is ProcessInfo selectedItem)
@@ -286,31 +339,20 @@ namespace ProcessPurge
             }
         }
 
-        /// <summary>
-        /// Removes the selected item from the Termination Order list.
-        /// </summary>
         private void Remove_Click(object sender, RoutedEventArgs e)
         {
             if (PurgeListView.SelectedItem is ProcessInfo selectedItem)
             {
-                // Uncheck it in the main list.
                 var mainListItem = AllProcesses.FirstOrDefault(p => p.Name == selectedItem.Name);
                 if (mainListItem != null)
                 {
                     mainListItem.IsSelected = false;
                 }
-
-                // Remove it from the purge list.
                 PurgeList.Remove(selectedItem);
-
-                // Refresh the main list's UI to show the unchecked box.
                 CollectionViewSource.GetDefaultView(ProcessListView.ItemsSource)?.Refresh();
             }
         }
 
-        /// <summary>
-        /// Handles sorting when a column header is clicked.
-        /// </summary>
         private void GridViewColumnHeader_Click(object sender, RoutedEventArgs e)
         {
             if (sender is GridViewColumnHeader headerClicked && headerClicked.Tag != null)
@@ -329,19 +371,14 @@ namespace ProcessPurge
             }
         }
 
-        // --- Main Action Button Clicks ---
+        private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await LoadProcessList();
         private void PurgeButton_Click(object sender, RoutedEventArgs e) => PurgeProcesses(true);
-        private void RefreshButton_Click(object sender, RoutedEventArgs e) => LoadProcessList();
         private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
 
-        /// <summary>
-        /// Opens the default web browser to the specified URL.
-        /// </summary>
         private void ChexedLogo_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                // UseShellExecute is important for opening URLs in the default browser.
                 Process.Start(new ProcessStartInfo("https://www.chexed.net/") { UseShellExecute = true });
             }
             catch (Exception ex)
@@ -352,9 +389,6 @@ namespace ProcessPurge
         #endregion
 
         #region System Tray and Settings
-        /// <summary>
-        /// Shows the main window when it's hidden.
-        /// </summary>
         private void ShowWindow()
         {
             this.Visibility = Visibility.Visible;
@@ -362,19 +396,13 @@ namespace ProcessPurge
             this.Activate();
         }
 
-        /// <summary>
-        /// Properly disposes the tray icon and shuts down the application.
-        /// </summary>
         private void ExitApplication()
         {
             if (_notifyIcon != null) _notifyIcon.Dispose();
             System.Windows.Application.Current.Shutdown();
         }
 
-        /// <summary>
-        /// Opens the settings window and applies changes if saved.
-        /// </summary>
-        private void OpenSettings()
+        private async void OpenSettings()
         {
             var settingsWindow = new SettingsWindow(_settings);
             if (settingsWindow.ShowDialog() == true)
@@ -383,28 +411,20 @@ namespace ProcessPurge
                 _settings.MinimizeToTrayOnClose = settingsWindow.MinimizeToTrayCheck.IsChecked ?? true;
                 _settings.PoliteKill = settingsWindow.PoliteKillCheck.IsChecked ?? true;
                 _settings.BlockCriticalProcesses = settingsWindow.BlockCriticalCheck.IsChecked ?? true;
+                _settings.ShowCpuPercentage = settingsWindow.ShowCpuPercentageCheck.IsChecked ?? false;
                 SaveSettings();
                 ManageStartupTask();
-                LoadProcessList(); // Refresh list to apply critical process block.
+                UpdateColumnVisibility();
+                await LoadProcessList();
             }
         }
 
-        /// <summary>
-        /// Shows the About message box.
-        /// </summary>
         private void ShowAbout()
         {
-            MessageBox.Show(
-                "ProcessPurge v0.9.1, July 4, 2025\n" +
-                "Sincerely, David Rader II\n\n" +
-                "https://chexed.net/\n\n" +
-                "Disclaimer: Use at your own risk.",
-                "About ProcessPurge");
+            var aboutWindow = new AboutWindow();
+            aboutWindow.ShowDialog();
         }
 
-        /// <summary>
-        /// Loads settings from the JSON file.
-        /// </summary>
         private void LoadSettings()
         {
             try
@@ -420,7 +440,6 @@ namespace ProcessPurge
                     string json = File.ReadAllText(_settingsFilePath);
                     _settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
 
-                    // After loading settings, populate the PurgeList from the saved order.
                     foreach (var processName in _settings.PurgeList)
                     {
                         if (!string.IsNullOrEmpty(processName))
@@ -433,9 +452,6 @@ namespace ProcessPurge
             catch { _settings = new AppSettings(); }
         }
 
-        /// <summary>
-        /// Saves the current settings to a JSON file.
-        /// </summary>
         private void SaveSettings()
         {
             try
@@ -451,9 +467,6 @@ namespace ProcessPurge
             }
         }
 
-        /// <summary>
-        /// Creates or deletes the scheduled task for starting with Windows.
-        /// </summary>
         private void ManageStartupTask()
         {
             const string taskName = "ProcessPurgeStartup";
@@ -468,7 +481,7 @@ namespace ProcessPurge
                         {
                             var td = ts.NewTask();
                             td.RegistrationInfo.Description = "Starts ProcessPurge at login.";
-                            td.Principal.RunLevel = TaskRunLevel.Highest; // Run as admin without UAC prompt.
+                            td.Principal.RunLevel = TaskRunLevel.Highest;
                             td.Triggers.Add(new LogonTrigger());
                             string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
                             if (exePath != null)
