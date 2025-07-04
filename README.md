@@ -70,5 +70,7 @@ ProcessPurge allows users to create a pre-defined, ordered list of applications 
 
 You are using this software solely at your own risk. It is provided 'as is' without warranty of any kind. The author is not responsible for any data loss or system instability that may result from its use.
 
+With incredible help from Google Gemini Pro 2.5 and Grok.
+
 *Developed by David Rader II*
 *https://chexed.net/*
